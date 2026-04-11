@@ -1,5 +1,5 @@
 export const vertexShader = /* glsl */ `
-  precision highp float;
+  precision mediump float;
 
   uniform float uTime;
   uniform float uColorSpeed;
@@ -58,7 +58,7 @@ export const vertexShader = /* glsl */ `
 `;
 
 export const fragmentShader = /* glsl */ `
-  precision highp float;
+  precision mediump float;
 
   uniform float uTime;
   uniform vec3  uColorA;
@@ -73,6 +73,10 @@ export const fragmentShader = /* glsl */ `
   uniform vec3  uShadowColor;
   uniform float uDistortion;
   uniform float uRoughness;
+  uniform vec3  uIconColor;
+  uniform sampler2D uIconTexture;
+  uniform float uHasIcon;
+  uniform float uIconSize;
 
   varying vec3 vNormal;
   varying vec3 vPosition;
@@ -109,10 +113,35 @@ export const fragmentShader = /* glsl */ `
     
     float chromaticIntensity = uChromaticAberration * (1.0 - clamp(dot(N_base, V), 0.0, 1.0)) * 0.4;
     
-    float r = getFluidColor(p + vec3(chromaticIntensity, chromaticIntensity*0.5, 0.0), t).r;
-    float g = getFluidColor(p, t).g;
-    float b = getFluidColor(p - vec3(chromaticIntensity, chromaticIntensity*0.5, 0.0), t).b;
-    vec3 fluidColor = vec3(r, g, b);
+    vec3 fluidColor;
+    if (chromaticIntensity > 0.01) {
+      float r = getFluidColor(p + vec3(chromaticIntensity, chromaticIntensity*0.5, 0.0), t).r;
+      float g = getFluidColor(p, t).g;
+      float b = getFluidColor(p - vec3(chromaticIntensity, chromaticIntensity*0.5, 0.0), t).b;
+      fluidColor = vec3(r, g, b);
+    } else {
+      fluidColor = getFluidColor(p, t);
+    }
+
+    // --- 1.5 3D Refracted Inside Icon ---
+    if (uHasIcon > 0.5 && sp.z > 0.0) {
+      // Scale is inverse: smaller multiplier = larger icon
+      float iconScale = 1.0 / clamp(uIconSize, 0.01, 10.0);
+      vec2 iconUv = sp.xy * iconScale; 
+      
+      // Magic Refraction: perturb the UVs based on the liquid waves!
+      iconUv -= liquidNormal.xy * clamp(uDistortion, 0.0, 1.0) * 0.5;
+      
+      // Remap to 0..1 range
+      iconUv = iconUv * 0.5 + 0.5;
+      
+      if (iconUv.x >= 0.0 && iconUv.x <= 1.0 && iconUv.y >= 0.0 && iconUv.y <= 1.0) {
+        vec4 iconTex = texture2D(uIconTexture, iconUv);
+        if (iconTex.a > 0.05) {
+          fluidColor = mix(fluidColor, uIconColor, iconTex.a);
+        }
+      }
+    }
 
     // 2. Internal White Rim
     float fadeEdge = 1.0 - clamp(dot(N_base, V), 0.0, 1.0); 

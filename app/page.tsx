@@ -21,7 +21,7 @@ export default function Home() {
         }}
       >
         <LuminaOrb
-          onClick={() => alert("LuminaOrb Clicked!")}
+          onClick={() => console.log("LuminaOrb Clicked!")}
         />
       </div>
 
