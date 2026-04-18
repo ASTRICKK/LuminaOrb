@@ -192,6 +192,7 @@ export const SphereMesh = memo(function SphereMesh({
   afrEase,
   hovered,
   setHovered,
+  isIdleRef,
   segments = 32,
   iconSrc,
   iconSize,
@@ -216,6 +217,7 @@ export const SphereMesh = memo(function SphereMesh({
   afrEase?: EaseName;
   hovered: boolean;
   setHovered: (v: boolean) => void;
+  isIdleRef: React.MutableRefObject<boolean>;
   segments?: number;
   iconSrc?: string;
   iconSize?: number;
@@ -315,6 +317,9 @@ export const SphereMesh = memo(function SphereMesh({
   }, [theme, rimThickness, blobDensity, chromaticAberration, roughness, lightColor, shadowColor, iconSize, iconColor]);
 
   // Keep camera position uniform in sync (for fresnel)
+  const lastRenderTime = useRef(performance.now());
+  const idleFpsInterval = 1000 / 16; // 16 FPS limit for idle
+
   useFrame((state, delta) => {
     if (!matRef.current) return;
     
@@ -367,7 +372,20 @@ export const SphereMesh = memo(function SphereMesh({
     const targetDist = hovered ? (hoverDistortion ?? distortion) : distortion;
     const currentDist = matRef.current.uniforms.uDistortion.value;
     matRef.current.uniforms.uDistortion.value += (targetDist - currentDist) * 5.0 * delta;
-  });
+
+    // --- Performance Rendering Tactic (FPS Limiter) ---
+    if (!isIdleRef.current || (animatedFirstRender && !isFinished.current)) {
+      // 60+ FPS while Hovered/Fading or Animating First Render
+      state.gl.render(state.scene, state.camera);
+    } else {
+      // Throttle to 30 FPS while Idle/Fading down
+      const now = performance.now();
+      if (now - lastRenderTime.current >= idleFpsInterval) {
+        lastRenderTime.current = now - ((now - lastRenderTime.current) % idleFpsInterval);
+        state.gl.render(state.scene, state.camera);
+      }
+    }
+  }, 1); // priority 1 takes over R3F's internal render loop!
 
   return (
     <mesh 
@@ -527,6 +545,9 @@ export default function LuminaOrb({
   const containerRef = useRef<HTMLDivElement>(null);
   const afrProgressRef = useRef<number>(-1);
 
+  const isIdleRef = useRef(false);
+  const idleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Audio setup
   const hoverAudio = useMemo(() => (typeof Audio !== "undefined" && hoverSound) ? new Audio(hoverSound) : null, [hoverSound]);
   const clickAudio = useMemo(() => (typeof Audio !== "undefined" && clickSound) ? new Audio(clickSound) : null, [clickSound]);
@@ -595,13 +616,25 @@ export default function LuminaOrb({
   const handlePointerOver = () => { 
     hoveredRef.current = true; 
     setHovered(true); 
+    isIdleRef.current = false;
+    if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
     updateStylesAPI(afrProgressRef.current, true);
     if (hoverAudio) {
       hoverAudio.currentTime = 0;
       hoverAudio.play().catch(() => {}); // catch to prevent error on first load/user interaction policy
     }
   };
-  const handlePointerOut = () => { hoveredRef.current = false; setHovered(false); updateStylesAPI(afrProgressRef.current, false); };
+
+  const handlePointerOut = () => { 
+    hoveredRef.current = false; 
+    setHovered(false); 
+    updateStylesAPI(afrProgressRef.current, false); 
+    
+    if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+    idleTimeoutRef.current = setTimeout(() => {
+      isIdleRef.current = true;
+    }, (opacityDelay + opacityDuration) * 1000);
+  };
 
   const handleOnClick = () => {
     if (clickAudio) {
@@ -644,6 +677,12 @@ export default function LuminaOrb({
   }, [animatedFirstRender, afrSpeed, afrColorSpeedDelay, afrColorSpeedDuration, afrGlowDelay, afrGlowDuration, afrOpacityDelay, afrOpacityDuration, updateStylesAPI]);
 
   useEffect(() => {
+    // Start initial idle timer
+    const totalAfrDelay = animatedFirstRender ? (afrOpacityDelay + afrOpacityDuration) : 0;
+    idleTimeoutRef.current = setTimeout(() => {
+      if (!hoveredRef.current) isIdleRef.current = true;
+    }, (opacityDelay + opacityDuration + totalAfrDelay) * 1000);
+
     const handleVisibilityChange = () => {
       setIsTabVisible(document.visibilityState === "visible");
     };
@@ -653,8 +692,9 @@ export default function LuminaOrb({
     
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
     };
-  }, []);
+  }, [opacityDelay, opacityDuration, afrOpacityDelay, afrOpacityDuration, animatedFirstRender]);
 
   return (
     <div
@@ -716,6 +756,7 @@ export default function LuminaOrb({
           afrEase={afrEase}
           hovered={hovered}
           setHovered={setHovered}
+          isIdleRef={isIdleRef}
           segments={segments}
           iconSrc={iconSrc}
           iconSize={iconSize}
